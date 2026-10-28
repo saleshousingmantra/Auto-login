@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sign In</title>
+<style>
+  :root { --bg:#f4f5f7; --card:#fff; --text:#1d2129; --muted:#6b7280; --accent:#2563eb; --border:#d1d5db; --ok:#16a34a; --err:#dc2626; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0f1115; --card:#1a1d23; --text:#e5e7eb; --muted:#9ca3af; --border:#374151; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; min-height:100vh; display:grid; place-items:center; background:var(--bg);
+         font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif; color:var(--text); padding:16px; }
+  .card { width:100%; max-width:380px; background:var(--card); border-radius:14px; padding:28px;
+          box-shadow:0 8px 30px rgba(0,0,0,.08); }
+  h1 { margin:0 0 4px; font-size:22px; }
+  p.sub { margin:0 0 22px; color:var(--muted); font-size:14px; }
+  label { display:block; font-size:13px; font-weight:600; margin-bottom:6px; }
+  input[type=email], input[type=password] { width:100%; padding:11px 12px; border:1px solid var(--border);
+         border-radius:8px; font-size:15px; background:transparent; color:var(--text); margin-bottom:16px; }
+  input:focus { outline:2px solid var(--accent); outline-offset:1px; border-color:transparent; }
+  .row { display:flex; align-items:center; gap:8px; font-size:14px; margin-bottom:18px; color:var(--muted); }
+  button { width:100%; padding:12px; border:0; border-radius:8px; background:var(--accent); color:#fff;
+           font-size:15px; font-weight:600; cursor:pointer; }
+  button:disabled { opacity:.6; cursor:default; }
+  .status { margin-top:14px; font-size:14px; min-height:20px; text-align:center; }
+  .status.ok { color:var(--ok); } .status.err { color:var(--err); }
+  .status a { color:var(--accent); cursor:pointer; text-decoration:underline; }
+  #home { display:none; text-align:center; }
+  #home button { margin-top:16px; background:#6b7280; }
+</style>
+</head>
+<body>
+<div class="card">
+  <form id="loginForm" autocomplete="on">
+    <h1>Welcome back</h1>
+    <p class="sub">Sign in to continue</p>
+
+    <label for="email">Email</label>
+    <input id="email" name="email" type="email" autocomplete="username" required>
+
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required>
+
+    <label class="row"><input type="checkbox" id="remember" checked> Remember me &amp; sign in automatically</label>
+
+    <button type="submit" id="loginBtn">Log in</button>
+    <div class="status" id="status"></div>
+  </form>
+
+  <div id="home">
+    <h1>You're signed in 🎉</h1>
+    <p class="sub" id="who"></p>
+    <button id="logoutBtn">Log out</button>
+  </div>
+</div>
+
+<script>
+const form = document.getElementById('loginForm');
+const emailEl = document.getElementById('email');
+const passEl = document.getElementById('password');
+const rememberEl = document.getElementById('remember');
+const btn = document.getElementById('loginBtn');
+const statusEl = document.getElementById('status');
+const AUTO_LOGIN_DELAY = 3; // seconds before auto-submit (gives user a chance to cancel)
+let countdownTimer = null;
+
+const supportsCredAPI = 'credentials' in navigator && 'PasswordCredential' in window;
+
+function setStatus(html, cls = '') { statusEl.className = 'status ' + cls; statusEl.innerHTML = html; }
+
+// ---- Replace this with your real backend call ----
+async function loginRequest(email, password) {
+  // Example:
+  // const res = await fetch('/api/login', { method:'POST', headers:{'Content-Type':'application/json'},
+  //   body: JSON.stringify({ email, password }), credentials:'include' });
+  // if (!res.ok) throw new Error('Invalid email or password');
+  // return res.json();
+  await new Promise(r => setTimeout(r, 700)); // demo delay
+  if (password.length < 4) throw new Error('Invalid email or password');
+  return { email };
+}
+
+async function doLogin() {
+  clearInterval(countdownTimer);
+  const email = emailEl.value.trim(), password = passEl.value;
+  if (!email || !password) return;
+  btn.disabled = true; setStatus('Signing in…');
+  try {
+    await loginRequest(email, password);
+    // Save credentials in the browser's password manager (secure, not localStorage)
+    if (supportsCredAPI && rememberEl.checked) {
+      await navigator.credentials.store(new PasswordCredential({ id: email, password, name: email }));
+    }
+    showHome(email);
+  } catch (e) {
+    setStatus(e.message || 'Login failed', 'err');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+form.addEventListener('submit', e => { e.preventDefault(); doLogin(); });
+
+// ---- Autofill saved credentials, then auto-trigger the login button ----
+async function autoFillAndLogin() {
+  if (!supportsCredAPI) return; // other browsers: native autofill still fills the fields
+  try {
+    const cred = await navigator.credentials.get({ password: true, mediation: 'optional' });
+    if (!cred) return;
+    emailEl.value = cred.id;
+    passEl.value = cred.password;
+    startCountdown();
+  } catch (e) { console.warn('Credential fetch failed', e); }
+}
+
+function startCountdown() {
+  let n = AUTO_LOGIN_DELAY;
+  const tick = () => setStatus(`Signing you in automatically in ${n}s… <a id="cancelAuto">Cancel</a>`);
+  tick();
+  document.addEventListener('click', e => {
+    if (e.target.id === 'cancelAuto') { clearInterval(countdownTimer); setStatus('Auto sign-in cancelled'); }
+  });
+  countdownTimer = setInterval(() => {
+    n--;
+    if (n <= 0) { clearInterval(countdownTimer); btn.click(); } // triggers login button
+    else tick();
+  }, 1000);
+}
+
+// Stop countdown if the user starts editing
+[emailEl, passEl].forEach(el => el.addEventListener('input', () => {
+  if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; setStatus(''); }
+}));
+
+function showHome(email) {
+  form.style.display = 'none';
+  document.getElementById('home').style.display = 'block';
+  document.getElementById('who').textContent = email;
+}
+
+document.getElementById('logoutBtn').addEventListener('click', async () => {
+  // Prevents an instant auto-login loop right after logging out
+  if (supportsCredAPI) await navigator.credentials.preventSilentAccess();
+  // await fetch('/api/logout', { method:'POST', credentials:'include' });
+  document.getElementById('home').style.display = 'none';
+  form.style.display = 'block';
+  passEl.value = '';
+  setStatus('Logged out', 'ok');
+});
+
+window.addEventListener('load', autoFillAndLogin);
+</script>
+</body>
+</html>
