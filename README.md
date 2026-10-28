@@ -6,7 +6,7 @@ A single-page login form that autofills saved credentials and signs in automatic
 - After a successful login with **Remember me** checked, the email and password are saved in this browser's `localStorage`.
 - On the next visit both fields are filled automatically and the **Log in** button is triggered after a 3-second countdown (cancellable). Works in every browser, no tap needed.
 - Chrome/Edge also save to the browser password manager (Credential Management API) as a fallback.
-- **Forget saved login on this device** (shown after login) clears the stored details. Logging out stops auto-login for that tab only.
+- **Forget saved login on this device** (shown after login) clears the stored details. Logging out returns to the form; the next page load signs in automatically again.
 
 > ⚠️ The password is only base64-encoded, not encrypted. Anyone with access to the browser/device (or any script running on the same domain) can read it. Fine for demos and personal devices; for production use a server-issued "remember me" token instead.
 

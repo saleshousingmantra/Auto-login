@@ -23,6 +23,7 @@
   .row { display:flex; align-items:center; gap:8px; font-size:14px; margin-bottom:18px; color:var(--muted); }
   button { width:100%; padding:12px; border:0; border-radius:8px; background:var(--accent); color:#fff;
            font-size:15px; font-weight:600; cursor:pointer; }
+  button.pressed { filter:brightness(.85); transform:scale(.98); }
   button:disabled { opacity:.6; cursor:default; }
   .status { margin-top:14px; font-size:14px; min-height:20px; text-align:center; }
   .status.ok { color:var(--ok); } .status.err { color:var(--err); }
@@ -126,17 +127,21 @@ form.addEventListener('submit', e => { e.preventDefault(); doLogin(); });
 // ---------- Auto sign-in countdown ----------
 function stopCountdown() { clearInterval(countdownTimer); countdownTimer = null; }
 function startCountdown() {
-  if (autoCancelled || countdownTimer || loggingIn || ls.get(LS_AUTO) === '0') return;
-  try { if (sessionStorage.getItem('autoLogin.loggedOut')) return; } catch {}
+  if (autoCancelled || countdownTimer || loggingIn) return;
   if (!emailEl.value || !passEl.value) return;
   let n = AUTO_LOGIN_DELAY;
   const tick = () => setStatus(`Signing you in automatically in ${n}s… <a id="cancelAuto">Cancel</a>`);
   tick();
   countdownTimer = setInterval(() => {
     n--;
-    if (n <= 0) { stopCountdown(); btn.click(); }   // triggers the login button
+    if (n <= 0) { stopCountdown(); autoSubmit(); }
     else tick();
   }, 1000);
+}
+function autoSubmit() {
+  btn.classList.add('pressed');          // visual feedback of the button being "clicked"
+  setTimeout(() => btn.classList.remove('pressed'), 200);
+  doLogin();                             // same code the Log in button runs
 }
 statusEl.addEventListener('click', e => {
   if (e.target.id === 'cancelAuto') { autoCancelled = true; stopCountdown(); setStatus('Auto sign-in cancelled'); }
@@ -177,7 +182,9 @@ let lastInputAt = 0;
   const bulkFill = !e.inputType || e.inputType === 'insertReplacementText' || (now - lastInputAt < 100);
   lastInputAt = now;
   if (bulkFill && emailEl.value && passEl.value) { autofillSeen = true; startCountdown(); }
-  else if (countdownTimer) { stopCountdown(); setStatus(''); }   // user is typing → stop auto-login
+  else if (countdownTimer && e.isTrusted && /^(insertText|delete)/.test(e.inputType || '')) {
+    stopCountdown(); setStatus('');      // user is actually typing → stop auto-login
+  }
 }));
 // After the first tap, Chrome releases the autofilled values
 document.addEventListener('pointerdown', () => {
@@ -192,7 +199,7 @@ function showHome(email) {
 }
 document.getElementById('logoutBtn').addEventListener('click', async () => {
   if (supportsCredAPI) { try { await navigator.credentials.preventSilentAccess(); } catch {} }
-  try { sessionStorage.setItem('autoLogin.loggedOut','1'); } catch {}  // no auto-login again in this tab
+  // (no auto-login right now; it will auto-login again on next page load)
   document.getElementById('home').style.display = 'none';
   form.style.display = 'block';
   passEl.value = '';
