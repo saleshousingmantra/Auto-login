@@ -3,9 +3,12 @@
 A single-page login form that autofills saved credentials and signs in automatically.
 
 ## How it works
-- After a successful login, the email and password are stored in the browser's built-in password manager via the Credential Management API (`navigator.credentials.store`) — never in localStorage.
-- On the next visit, saved credentials are retrieved (`navigator.credentials.get`), filled into the form, and the **Log in** button is triggered automatically after a 3-second countdown (cancellable).
-- Logging out calls `preventSilentAccess()` so the user isn't instantly signed back in.
+- After a successful login with **Remember me** checked, the email and password are saved in this browser's `localStorage`.
+- On the next visit both fields are filled automatically and the **Log in** button is triggered after a 3-second countdown (cancellable). Works in every browser, no tap needed.
+- Chrome/Edge also save to the browser password manager (Credential Management API) as a fallback.
+- **Forget saved login on this device** (shown after login) clears the stored details. Logging out stops auto-login for that tab only.
+
+> ⚠️ The password is only base64-encoded, not encrypted. Anyone with access to the browser/device (or any script running on the same domain) can read it. Fine for demos and personal devices; for production use a server-issued "remember me" token instead.
 
 ## Setup
 1. Replace the demo `loginRequest()` in `index.html` with your real backend call (example included in comments).
