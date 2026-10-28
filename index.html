@@ -29,6 +29,9 @@
   .status a { color:var(--accent); cursor:pointer; text-decoration:underline; }
   #home { display:none; text-align:center; }
   #home button { margin-top:16px; background:#6b7280; }
+  /* Lets JS detect when the browser autofills a field */
+  @keyframes onAutoFill { from {} to {} }
+  input:-webkit-autofill { animation-name: onAutoFill; animation-duration: 1ms; }
 </style>
 </head>
 <body>
@@ -63,16 +66,24 @@ const passEl = document.getElementById('password');
 const rememberEl = document.getElementById('remember');
 const btn = document.getElementById('loginBtn');
 const statusEl = document.getElementById('status');
-const AUTO_LOGIN_DELAY = 3; // seconds before auto-submit (gives user a chance to cancel)
+const AUTO_LOGIN_DELAY = 3;          // seconds before auto-submit (user can cancel)
+const LS_EMAIL = 'autoLogin.email';  // only the email is kept here, never the password
+const LS_AUTO  = 'autoLogin.enabled';
 let countdownTimer = null;
+let autoCancelled = false;
+let loggingIn = false;
 
 const supportsCredAPI = 'credentials' in navigator && 'PasswordCredential' in window;
+const ls = {
+  get(k){ try { return localStorage.getItem(k); } catch { return null; } },
+  set(k,v){ try { localStorage.setItem(k,v); } catch {} },
+  del(k){ try { localStorage.removeItem(k); } catch {} },
+};
 
 function setStatus(html, cls = '') { statusEl.className = 'status ' + cls; statusEl.innerHTML = html; }
 
 // ---- Replace this with your real backend call ----
 async function loginRequest(email, password) {
-  // Example:
   // const res = await fetch('/api/login', { method:'POST', headers:{'Content-Type':'application/json'},
   //   body: JSON.stringify({ email, password }), credentials:'include' });
   // if (!res.ok) throw new Error('Invalid email or password');
@@ -83,74 +94,120 @@ async function loginRequest(email, password) {
 }
 
 async function doLogin() {
-  clearInterval(countdownTimer);
+  stopCountdown();
   const email = emailEl.value.trim(), password = passEl.value;
-  if (!email || !password) return;
-  btn.disabled = true; setStatus('Signing in…');
+  if (!email || !password || loggingIn) return;
+  loggingIn = true; btn.disabled = true; setStatus('Signing in…');
   try {
     await loginRequest(email, password);
-    // Save credentials in the browser's password manager (secure, not localStorage)
-    if (supportsCredAPI && rememberEl.checked) {
-      await navigator.credentials.store(new PasswordCredential({ id: email, password, name: email }));
+    if (rememberEl.checked) {
+      ls.set(LS_EMAIL, email); ls.set(LS_AUTO, '1');
+      // Chrome/Edge: save to the browser password manager (shows the "Save password?" prompt)
+      if (supportsCredAPI) {
+        try { await navigator.credentials.store(new PasswordCredential({ id: email, password, name: email })); }
+        catch (e) { console.warn('store failed', e); }
+      }
+    } else {
+      ls.del(LS_EMAIL); ls.del(LS_AUTO);
     }
     showHome(email);
   } catch (e) {
     setStatus(e.message || 'Login failed', 'err');
   } finally {
-    btn.disabled = false;
+    loggingIn = false; btn.disabled = false;
   }
 }
-
 form.addEventListener('submit', e => { e.preventDefault(); doLogin(); });
 
-// ---- Autofill saved credentials, then auto-trigger the login button ----
-async function autoFillAndLogin() {
-  if (!supportsCredAPI) return; // other browsers: native autofill still fills the fields
-  try {
-    const cred = await navigator.credentials.get({ password: true, mediation: 'optional' });
-    if (!cred) return;
-    emailEl.value = cred.id;
-    passEl.value = cred.password;
-    startCountdown();
-  } catch (e) { console.warn('Credential fetch failed', e); }
-}
-
+// ---------- Auto sign-in countdown ----------
+function stopCountdown() { clearInterval(countdownTimer); countdownTimer = null; }
 function startCountdown() {
+  if (autoCancelled || countdownTimer || loggingIn || ls.get(LS_AUTO) === '0') return;
+  try { if (sessionStorage.getItem('autoLogin.loggedOut')) return; } catch {}
+  if (!emailEl.value || !passEl.value) return;
   let n = AUTO_LOGIN_DELAY;
   const tick = () => setStatus(`Signing you in automatically in ${n}s… <a id="cancelAuto">Cancel</a>`);
   tick();
-  document.addEventListener('click', e => {
-    if (e.target.id === 'cancelAuto') { clearInterval(countdownTimer); setStatus('Auto sign-in cancelled'); }
-  });
   countdownTimer = setInterval(() => {
     n--;
-    if (n <= 0) { clearInterval(countdownTimer); btn.click(); } // triggers login button
+    if (n <= 0) { stopCountdown(); btn.click(); }   // triggers the login button
     else tick();
   }, 1000);
 }
+statusEl.addEventListener('click', e => {
+  if (e.target.id === 'cancelAuto') { autoCancelled = true; stopCountdown(); setStatus('Auto sign-in cancelled'); }
+});
 
-// Stop countdown if the user starts editing
-[emailEl, passEl].forEach(el => el.addEventListener('input', () => {
-  if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; setStatus(''); }
+// ---------- 1) Chrome/Edge: read saved credential directly ----------
+async function tryCredentialAPI() {
+  if (!supportsCredAPI) return false;
+  try {
+    const cred = await navigator.credentials.get({ password: true, mediation: 'optional' });
+    if (cred && cred.password) {
+      emailEl.value = cred.id; passEl.value = cred.password;
+      startCountdown();
+      return true;
+    }
+  } catch (e) { console.warn('credentials.get failed', e); }
+  return false;
+}
+
+// ---------- 2) Any browser: detect the browser's own autofill ----------
+// Chrome hides autofilled values from JS until the user taps/clicks the page,
+// so if we see autofill but can't read it yet, we ask for one tap.
+let autofillSeen = false;
+function onAutofillDetected() {
+  autofillSeen = true;
+  setTimeout(() => {
+    if (emailEl.value && passEl.value) startCountdown();
+    else if (!countdownTimer && !loggingIn) setStatus('Saved login found — tap anywhere to sign in');
+  }, 50);
+}
+[emailEl, passEl].forEach(el => {
+  el.addEventListener('animationstart', e => { if (e.animationName === 'onAutoFill') onAutofillDetected(); });
+});
+// Safari / Firefox / mobile: picking a saved login fills both fields at once
+let lastInputAt = 0;
+[emailEl, passEl].forEach(el => el.addEventListener('input', e => {
+  const now = Date.now();
+  const bulkFill = !e.inputType || e.inputType === 'insertReplacementText' || (now - lastInputAt < 100);
+  lastInputAt = now;
+  if (bulkFill && emailEl.value && passEl.value) { autofillSeen = true; startCountdown(); }
+  else if (countdownTimer) { stopCountdown(); setStatus(''); }   // user is typing → stop auto-login
 }));
+// After the first tap, Chrome releases the autofilled values
+document.addEventListener('pointerdown', () => {
+  setTimeout(() => { if (autofillSeen && emailEl.value && passEl.value) startCountdown(); }, 100);
+}, { once: true });
 
+// ---------- Home / logout ----------
 function showHome(email) {
   form.style.display = 'none';
   document.getElementById('home').style.display = 'block';
   document.getElementById('who').textContent = email;
 }
-
 document.getElementById('logoutBtn').addEventListener('click', async () => {
-  // Prevents an instant auto-login loop right after logging out
-  if (supportsCredAPI) await navigator.credentials.preventSilentAccess();
-  // await fetch('/api/logout', { method:'POST', credentials:'include' });
+  if (supportsCredAPI) { try { await navigator.credentials.preventSilentAccess(); } catch {} }
+  try { sessionStorage.setItem('autoLogin.loggedOut','1'); } catch {}  // no auto-login again in this tab
   document.getElementById('home').style.display = 'none';
   form.style.display = 'block';
   passEl.value = '';
   setStatus('Logged out', 'ok');
 });
 
-window.addEventListener('load', autoFillAndLogin);
+// ---------- Startup ----------
+window.addEventListener('load', async () => {
+  if (!window.isSecureContext) {
+    setStatus('Open this page over HTTPS (e.g. GitHub Pages) — browsers won\'t save or autofill passwords otherwise.', 'err');
+    return;
+  }
+  const savedEmail = ls.get(LS_EMAIL);
+  if (savedEmail && !emailEl.value) emailEl.value = savedEmail;
+  if (await tryCredentialAPI()) return;
+  if (savedEmail && !passEl.value) {
+    setStatus('Tap the password field and pick your saved password to sign in automatically');
+  }
+});
 </script>
 </body>
 </html>
