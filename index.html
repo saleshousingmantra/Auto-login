@@ -23,6 +23,19 @@
   .row { display:flex; align-items:center; gap:8px; font-size:14px; margin-bottom:18px; color:var(--muted); }
   button { width:100%; padding:12px; border:0; border-radius:8px; background:var(--accent); color:#fff;
            font-size:15px; font-weight:600; cursor:pointer; }
+  .accounts { margin:0 0 18px; display:none; }
+  .accounts .hdr { font-size:13px; font-weight:600; margin-bottom:8px; display:flex; justify-content:space-between; }
+  .accounts .hdr a { color:var(--accent); font-weight:500; cursor:pointer; }
+  .acct { display:flex; align-items:center; gap:10px; width:100%; padding:10px 12px; margin-bottom:8px;
+          border:1px solid var(--border); border-radius:10px; background:transparent; color:var(--text);
+          cursor:pointer; text-align:left; font-size:14px; font-weight:500; }
+  .acct:hover { border-color:var(--accent); }
+  .acct.active { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent) inset; }
+  .acct .av { flex:none; width:30px; height:30px; border-radius:50%; background:var(--accent); color:#fff;
+              display:grid; place-items:center; font-weight:700; font-size:13px; text-transform:uppercase; }
+  .acct .em { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .acct .rm { flex:none; color:var(--muted); font-size:18px; line-height:1; padding:2px 6px; border-radius:6px; }
+  .acct .rm:hover { color:var(--err); }
   button.pressed { filter:brightness(.85); transform:scale(.98); }
   button:disabled { opacity:.6; cursor:default; }
   .status { margin-top:14px; font-size:14px; min-height:20px; text-align:center; }
@@ -41,6 +54,11 @@
     <h1>Welcome back</h1>
     <p class="sub">Sign in to continue</p>
 
+    <div class="accounts" id="accounts">
+      <div class="hdr"><span>Saved accounts</span><a id="otherAcct">Use another account</a></div>
+      <div id="acctList"></div>
+    </div>
+
     <label for="email">Email</label>
     <input id="email" name="email" type="email" autocomplete="username" required>
 
@@ -57,7 +75,7 @@
     <h1>You're signed in 🎉</h1>
     <p class="sub" id="who"></p>
     <button id="logoutBtn">Log out</button>
-    <p class="sub" style="margin-top:14px"><a href="#" id="forgetBtn" style="color:var(--muted)">Forget saved login on this device</a></p>
+    <p class="sub" style="margin-top:14px"><a href="#" id="forgetBtn" style="color:var(--muted)">Remove this account from saved logins</a></p>
   </div>
 </div>
 
@@ -69,11 +87,9 @@ const rememberEl = document.getElementById('remember');
 const btn = document.getElementById('loginBtn');
 const statusEl = document.getElementById('status');
 const AUTO_LOGIN_DELAY = 3;          // seconds before auto-submit (user can cancel)
-const LS_EMAIL = 'autoLogin.email';
-const LS_PASS  = 'autoLogin.pass';   // NOTE: readable by anyone with access to this browser
+const LS_ACCTS = 'autoLogin.accounts';  // [{email, pass, last}] — NOTE: readable by anyone using this browser
 const enc = v => btoa(unescape(encodeURIComponent(v)));
 const dec = v => { try { return decodeURIComponent(escape(atob(v))); } catch { return ''; } };
-const LS_AUTO  = 'autoLogin.enabled';
 let countdownTimer = null;
 let autoCancelled = false;
 let loggingIn = false;
@@ -84,6 +100,63 @@ const ls = {
   set(k,v){ try { localStorage.setItem(k,v); } catch {} },
   del(k){ try { localStorage.removeItem(k); } catch {} },
 };
+
+// ---------- Saved accounts ----------
+function getAccounts() {
+  let list = [];
+  try { list = JSON.parse(ls.get(LS_ACCTS) || '[]'); } catch {}
+  // migrate the old single-account format
+  const oldE = ls.get('autoLogin.email'), oldP = ls.get('autoLogin.pass');
+  if (oldE && oldP) {
+    if (!list.some(a => a.email === oldE)) list.push({ email: oldE, pass: oldP, last: 0 });
+    ls.set(LS_ACCTS, JSON.stringify(list));
+    ls.del('autoLogin.email'); ls.del('autoLogin.pass'); ls.del('autoLogin.enabled');
+  }
+  return list.sort((a, b) => b.last - a.last);           // most recently used first
+}
+function saveAccounts(list) { ls.set(LS_ACCTS, JSON.stringify(list)); }
+function upsertAccount(email, password) {
+  const list = getAccounts().filter(a => a.email.toLowerCase() !== email.toLowerCase());
+  list.push({ email, pass: enc(password), last: Date.now() });
+  saveAccounts(list);
+}
+function removeAccount(email) { saveAccounts(getAccounts().filter(a => a.email !== email)); }
+
+const acctBox = document.getElementById('accounts');
+const acctList = document.getElementById('acctList');
+function renderAccounts(activeEmail) {
+  const list = getAccounts();
+  acctBox.style.display = list.length ? 'block' : 'none';
+  acctList.innerHTML = '';
+  list.forEach(a => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'acct' + (a.email === activeEmail ? ' active' : '');
+    b.innerHTML = `<span class="av"></span><span class="em"></span><span class="rm" title="Remove">×</span>`;
+    b.querySelector('.av').textContent = a.email[0] || '?';
+    b.querySelector('.em').textContent = a.email;
+    b.addEventListener('click', e => {
+      if (e.target.classList.contains('rm')) {         // remove this saved account
+        removeAccount(a.email);
+        if (emailEl.value === a.email) { stopCountdown(); emailEl.value = ''; passEl.value = ''; setStatus(''); }
+        renderAccounts(emailEl.value);
+        return;
+      }
+      fillAccount(a, true);                            // pick → fill → log in
+    });
+    acctList.appendChild(b);
+  });
+}
+function fillAccount(a, immediate) {
+  stopCountdown(); autoCancelled = false;
+  emailEl.value = a.email; passEl.value = dec(a.pass);
+  renderAccounts(a.email);
+  if (immediate) autoSubmit(); else startCountdown();
+}
+document.getElementById('otherAcct').addEventListener('click', () => {
+  stopCountdown(); emailEl.value = ''; passEl.value = ''; setStatus('');
+  renderAccounts(''); emailEl.focus();
+});
 
 function setStatus(html, cls = '') { statusEl.className = 'status ' + cls; statusEl.innerHTML = html; }
 
@@ -106,14 +179,13 @@ async function doLogin() {
   try {
     await loginRequest(email, password);
     if (rememberEl.checked) {
-      ls.set(LS_EMAIL, email); ls.set(LS_PASS, enc(password)); ls.set(LS_AUTO, '1');
+      upsertAccount(email, password);
       // Chrome/Edge: save to the browser password manager (shows the "Save password?" prompt)
       if (supportsCredAPI) {
         try { await navigator.credentials.store(new PasswordCredential({ id: email, password, name: email })); }
         catch (e) { console.warn('store failed', e); }
       }
     } else {
-      ls.del(LS_EMAIL); ls.del(LS_PASS); ls.del(LS_AUTO);
     }
     showHome(email);
   } catch (e) {
@@ -196,36 +268,33 @@ function showHome(email) {
   form.style.display = 'none';
   document.getElementById('home').style.display = 'block';
   document.getElementById('who').textContent = email;
+  document.getElementById('forgetBtn').textContent = 'Remove this account from saved logins';
 }
 document.getElementById('logoutBtn').addEventListener('click', async () => {
   if (supportsCredAPI) { try { await navigator.credentials.preventSilentAccess(); } catch {} }
   // (no auto-login right now; it will auto-login again on next page load)
   document.getElementById('home').style.display = 'none';
   form.style.display = 'block';
-  passEl.value = '';
-  setStatus('Logged out', 'ok');
+  emailEl.value = ''; passEl.value = '';
+  renderAccounts('');
+  setStatus('Logged out — pick an account to sign in', 'ok');
 });
 
 document.getElementById('forgetBtn').addEventListener('click', e => {
   e.preventDefault();
-  ls.del(LS_EMAIL); ls.del(LS_PASS); ls.del(LS_AUTO);
-  e.target.textContent = 'Saved login removed';
+  removeAccount(document.getElementById('who').textContent);
+  e.target.textContent = 'Removed from saved logins';
 });
 
 // ---------- Startup ----------
 window.addEventListener('load', async () => {
-  const savedEmail = ls.get(LS_EMAIL);
-  const savedPass = dec(ls.get(LS_PASS) || '');
-  if (savedEmail && savedPass) {           // works in every browser, no tap needed
-    emailEl.value = savedEmail; passEl.value = savedPass;
-    startCountdown();
+  const list = getAccounts();
+  renderAccounts('');
+  if (list.length) {                       // auto-fill the last-used account; tap another to switch
+    fillAccount(list[0], false);
     return;
   }
-  if (savedEmail && !emailEl.value) emailEl.value = savedEmail;
-  if (await tryCredentialAPI()) return;
-  if (savedEmail && !passEl.value) {
-    setStatus('Tap the password field and pick your saved password to sign in automatically');
-  }
+  await tryCredentialAPI();
 });
 </script>
 </body>
